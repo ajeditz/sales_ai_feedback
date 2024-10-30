@@ -9,6 +9,7 @@ import aiohttp
 import os
 import sys
 
+
 from PIL import Image
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -123,12 +124,20 @@ async def main():
         #     #
         #     # model="eleven_multilingual_v2",
         #     # voice_id="gD1IexrzCvsXPHUuT0s3",
-        # )
-        tts = CartesiaTTSService(
-                api_key=os.getenv("CARTESIA_API_KEY"),
-                voice_id=os.getenv("CARTESIA_VOICE_ID")
-            )
+        #)
 
+
+        params = CartesiaTTSService.InputParams(
+            speed="normal",
+            emotion=["positivity:high",
+                     "curiosity"]
+        )
+
+        tts = CartesiaTTSService(
+            api_key=os.getenv("CARTESIA_API_KEY"),
+            voice_id=os.getenv("CARTESIA_VOICE_ID"),
+            params=params
+        )
         llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
 
         messages = [
@@ -137,7 +146,8 @@ async def main():
                 #
                 # English
                 #
-                "content": "You are Chatbot, a friendly, helpful robot. Your goal is to demonstrate your capabilities in a succinct way. Your output will be converted to audio so don't include special characters in your answers. Respond to what the user said in a creative and helpful way, but keep your responses brief. Start by introducing yourself.",
+                # "content": "You are Chatbot, a friendly, helpful robot. Your goal is to demonstrate your capabilities in a succinct way. Your output will be converted to audio so don't include special characters in your answers. Respond to what the user said in a creative and helpful way, but keep your responses brief. Start by introducing yourself.",
+                "content": """You are a lady who runs a small bakery in her local town. Your business is doing well with local foot traffic, but you have noticed that your online orders have been stagnant. Your current website, built years ago using a free platform, looks outdated and doesn’t function well on mobile devices. You know you need a better website to attract more customers, but you've been putting it off due to lack of time and not knowing where to start. You get a call from a sales agent, from a company that specializes in affordable website redesigns for small businesses. The agent will try to sell you his services so engage with him as a prospect. You are a skeptical and curious prospect who will question the agent about how his services are better for your business. Remember You are the prospect and not the sales person""",
                 #
                 # Spanish
                 #
