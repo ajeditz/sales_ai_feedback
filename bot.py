@@ -173,7 +173,7 @@ async def main():
                     logger.info(f"[{entry['timestamp']}] {entry['text']}")
                 
                 # Save transcriptions to file
-                await save_transcription(transcriptions, participant_id)
+                # await save_transcription(transcriptions, participant_id)
                 
                 # Save message log
                 await save_message_log(context, participant_id)
