@@ -1,189 +1,214 @@
-#
-# Copyright (c) 2024, Daily
-#
-# SPDX-License-Identifier: BSD 2-Clause License
-#
-
 import asyncio
-import aiohttp
 import os
 import sys
+from typing import Dict
+import json
 
-
-from PIL import Image
+import aiohttp
+import datetime
+import wave
+from dotenv import load_dotenv
+from loguru import logger
+from runner import configure
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import EndFrame, LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.frames.frames import (
-    OutputImageRawFrame,
-    SpriteFrame,
-    Frame,
-    LLMMessagesFrame,
-    TTSAudioRawFrame,
-    TTSStoppedFrame,
-)
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-# from pipecat.services.elevenlabs import ElevenLabsTTSService
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.services.elevenlabs import ElevenLabsTTSService
 from pipecat.services.cartesia import CartesiaTTSService
 from pipecat.services.openai import OpenAILLMService
-from pipecat.transports.services.daily import DailyParams, DailyTransport
+from pipecat.transports.services.daily import DailyParams, DailyTransport, DailyTranscriptionSettings
+import uuid
+import firebase_admin
+from firebase_admin import firestore, credentials
 
-from runner import configure
-
-from loguru import logger
-
-from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-sprites = []
-
-script_dir = os.path.dirname(__file__)
-
-for i in range(1, 26):
-    # Build the full path to the image file
-    full_path = os.path.join(script_dir, f"assets/robot0{i}.png")
-    # Get the filename without the extension to use as the dictionary key
-    # Open the image and convert it to bytes
-    with Image.open(full_path) as img:
-        sprites.append(OutputImageRawFrame(image=img.tobytes(), size=img.size, format=img.format))
-
-flipped = sprites[::-1]
-sprites.extend(flipped)
-
-# When the bot isn't talking, show a static image of the cat listening
-quiet_frame = sprites[0]
-talking_frame = SpriteFrame(images=sprites)
+FILES_DIR = "saved_files"
 
 
-class TalkingAnimation(FrameProcessor):
-    """
-    This class starts a talking animation when it receives an first AudioFrame,
-    and then returns to a "quiet" sprite when it sees a TTSStoppedFrame.
-    """
+cred = credentials.Certificate(os.getenv("CRED_PATH"))
+firebase_admin.initialize_app(cred)
 
-    def __init__(self):
-        super().__init__()
-        self._is_talking = False
+db = firestore.client()
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
 
-        if isinstance(frame, TTSAudioRawFrame):
-            if not self._is_talking:
-                await self.push_frame(talking_frame)
-                self._is_talking = True
-        elif isinstance(frame, TTSStoppedFrame):
-            await self.push_frame(quiet_frame)
-            self._is_talking = False
+async def create_agent(room_id, transcript):
+    doc_ref = db.collection("Transcription").document(room_id)
+    data={
+        "prompt":transcript
+    }
+    doc_ref.set(data)
+    print(f"Agent {room_id} created succesfully.")
 
-        await self.push_frame(frame)
 
+async def save_audio(audiobuffer, room_url):
+    """Save the audio buffer to a WAV file"""
+    if audiobuffer.has_audio():
+        merged_audio = audiobuffer.merge_audio_buffers()
+        filename = os.path.join(FILES_DIR, f"audio_{room_url.removeprefix("https://applicationsquare.daily.co/")}.wav")
+        with wave.open(filename, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(audiobuffer._sample_rate)
+            wf.writeframes(merged_audio)
+        logger.info(f"Merged audio saved to {filename}")
+    else:
+        logger.warning("No audio data to save")
+
+async def save_transcription(transcriptions: Dict, participant_id: str, room_url: str):
+    """Save transcriptions to a JSON file"""
+    if participant_id in transcriptions:
+        filename = os.path.join(FILES_DIR, f"transcription_{room_url.removeprefix("https://applicationsquare.daily.co/")}.json")        
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(transcriptions[participant_id], f, ensure_ascii=False, indent=2)
+        logger.info(f"Transcription saved to {filename}")
+
+async def save_message_log(context, participant_id: str, room_url: str):
+    """Save the latest message log to a JSON file"""
+    if context and context.get_messages():
+        filename = os.path.join(FILES_DIR, f"message_logs_{room_url.removeprefix("https://applicationsquare.daily.co/")}.json")
+        full_path = os.path.abspath(filename)
+        
+        # Convert messages to a format that can be easily serialized
+        messages_to_save = context.get_messages()
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(messages_to_save, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Message log saved to full path: {full_path}")
 
 async def main():
     async with aiohttp.ClientSession() as session:
+        # Get room configuration
         (room_url, token) = await configure(session)
 
+        # Store transcriptions
+        transcriptions: Dict[str, list] = {}
+
+        # Initialize Daily transport
         transport = DailyTransport(
             room_url,
             token,
             "Chatbot",
             DailyParams(
                 audio_out_enabled=True,
-                camera_out_enabled=True,
-                camera_out_width=1024,
-                camera_out_height=576,
+                audio_in_enabled=True,
+                camera_out_enabled=False,
                 vad_enabled=True,
+                vad_audio_passthrough=True,
                 vad_analyzer=SileroVADAnalyzer(),
                 transcription_enabled=True,
-                #
-                # Spanish
-                #
-                # transcription_settings=DailyTranscriptionSettings(
-                #     language="es",
-                #     tier="nova",
-                #     model="2-general"
-                # )
+                transcription_settings=DailyTranscriptionSettings(
+                    language="en",  # Change to "es" for Spanish
+                    tier="nova",
+                    model="2-general"
+                )
             ),
         )
 
-        # tts = ElevenLabsTTSService(
-        #     api_key=os.getenv("ELEVENLABS_API_KEY"),
-        #     #
-        #     # English
-        #     #
-        #     voice_id="pNInz6obpgDQGcFmaJgB",
-        #     #
-        #     # Spanish
-        #     #
-        #     # model="eleven_multilingual_v2",
-        #     # voice_id="gD1IexrzCvsXPHUuT0s3",
-        #)
-
-
-        params = CartesiaTTSService.InputParams(
-            speed="normal",
-            emotion=["positivity:high",
-                     "curiosity"]
-        )
-
+        # Initialize TTS service
         tts = CartesiaTTSService(
             api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id=os.getenv("CARTESIA_VOICE_ID"),
-            params=params
+            voice_id="a0e99841-438c-4a64-b679-ae501e7d6091",  # English voice
         )
+
+        # Initialize LLM service
         llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
 
+        # Initial messages for the chatbot
         messages = [
             {
                 "role": "system",
-                #
-                # English
-                #
-                # "content": "You are Chatbot, a friendly, helpful robot. Your goal is to demonstrate your capabilities in a succinct way. Your output will be converted to audio so don't include special characters in your answers. Respond to what the user said in a creative and helpful way, but keep your responses brief. Start by introducing yourself.",
-                "content": """You are a lady who runs a small bakery in her local town. Your business is doing well with local foot traffic, but you have noticed that your online orders have been stagnant. Your current website, built years ago using a free platform, looks outdated and doesn’t function well on mobile devices. You know you need a better website to attract more customers, but you've been putting it off due to lack of time and not knowing where to start. You get a call from a sales agent, from a company that specializes in affordable website redesigns for small businesses. The agent will try to sell you his services so engage with him as a prospect. You are a skeptical and curious prospect who will question the agent about how his services are better for your business. Remember You are the prospect and not the sales person""",
-                #
-                # Spanish
-                #
-                # "content": "Eres Chatbot, un amigable y útil robot. Tu objetivo es demostrar tus capacidades de una manera breve. Tus respuestas se convertiran a audio así que nunca no debes incluir caracteres especiales. Contesta a lo que el usuario pregunte de una manera creativa, útil y breve. Empieza por presentarte a ti mismo.",
+                "content": "You are Chatbot, a friendly, helpful robot. Your goal is to demonstrate your capabilities in a succinct way. Your output will be converted to audio so don't include special characters in your answers. Respond to what the user said in a creative and helpful way, but keep your responses brief. Start by introducing yourself. Keep all your response to 12 words or fewer.",
             },
         ]
 
+        # Initialize context and pipeline components
         context = OpenAILLMContext(messages)
         context_aggregator = llm.create_context_aggregator(context)
+        audiobuffer = AudioBufferProcessor()
 
-        ta = TalkingAnimation()
-
+        # Create pipeline
         pipeline = Pipeline(
             [
                 transport.input(),
                 context_aggregator.user(),
                 llm,
                 tts,
-                ta,
                 transport.output(),
+                audiobuffer,
                 context_aggregator.assistant(),
             ]
         )
 
+        # Initialize pipeline task
         task = PipelineTask(pipeline, PipelineParams(allow_interruptions=True))
-        await task.queue_frame(quiet_frame)
+
+        @transport.event_handler("on_transcription_message")
+        async def on_transcription_message(transport, message):
+            """Handle incoming transcriptions"""
+            participant_id = message.get("participantId", "")
+            if not participant_id:
+                return
+
+            if participant_id not in transcriptions:
+                transcriptions[participant_id] = []
+            
+            # Store transcription with metadata
+            transcriptions[participant_id].append({
+                'text': message.get('text', ''),
+                'timestamp': message.get('timestamp', datetime.datetime.now().isoformat()),
+                'is_final': message.get('rawResponse', {}).get('is_final', False),
+                'confidence': message.get('rawResponse', {}).get('confidence', 0.0)
+            })
+            
+            # Print real-time transcription
+            logger.info(f"Transcription from {participant_id}: {message.get('text', '')}")
+            if message.get('rawResponse', {}).get('is_final'):
+                logger.info(f"Final transcription confidence: {message.get('rawResponse', {}).get('confidence', 0.0)}")
 
         @transport.event_handler("on_first_participant_joined")
         async def on_first_participant_joined(transport, participant):
-            transport.capture_participant_transcription(participant["id"])
+            """Handle first participant joining"""
+            await transport.capture_participant_transcription(participant["id"])
             await task.queue_frames([LLMMessagesFrame(messages)])
+            logger.info(f"First participant joined: {participant['id']}")
 
+        @transport.event_handler("on_participant_left")
+        async def on_participant_left(transport, participant, reason):
+            """Handle participant leaving"""
+            participant_id = participant['id']
+            logger.info(f"Participant left: {participant_id}")
+            
+            # Print final transcriptions
+            if participant_id in transcriptions:
+                logger.info(f"\nFinal transcriptions for participant {participant_id}:")
+                for entry in transcriptions[participant_id]:
+                    logger.info(f"[{entry['timestamp']}] {entry['text']}")
+                
+                # Save transcriptions to file
+                # await save_transcription(transcriptions, participant_id, room_url)
+                
+                # Save message log
+                await save_message_log(context, participant_id, room_url)
+            
+            # Save audio and end pipeline
+            await save_audio(audiobuffer, room_url)
+            await create_agent(room_url.removeprefix("https://applicationsquare.daily.co/"), context.get_messages())
+            await task.queue_frame(EndFrame())
+
+        # Run the pipeline
         runner = PipelineRunner()
-
         await runner.run(task)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
