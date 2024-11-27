@@ -41,7 +41,7 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 
-async def create_agent(room_id, transcript):
+async def save_in_db(room_id, transcript):
     doc_ref = db.collection("Transcription").document(room_id)
     data={
         "prompt":transcript
@@ -203,7 +203,7 @@ async def main():
             
             # Save audio and end pipeline
             await save_audio(audiobuffer, room_url)
-            await create_agent(room_url.removeprefix("https://applicationsquare.daily.co/"), context.get_messages())
+            await save_in_db(room_url.removeprefix("https://applicationsquare.daily.co/"), context.get_messages())
             await task.queue_frame(EndFrame())
 
         # Run the pipeline
