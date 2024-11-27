@@ -3,6 +3,7 @@ import os
 import sys
 from typing import Dict
 import json
+
 import aiohttp
 import datetime
 import wave
@@ -21,17 +22,39 @@ from pipecat.services.elevenlabs import ElevenLabsTTSService
 from pipecat.services.cartesia import CartesiaTTSService
 from pipecat.services.openai import OpenAILLMService
 from pipecat.transports.services.daily import DailyParams, DailyTransport, DailyTranscriptionSettings
+import uuid
+import firebase_admin
+from firebase_admin import firestore, credentials
+
 
 load_dotenv(override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-async def save_audio(audiobuffer):
+FILES_DIR = "saved_files"
+
+
+cred = credentials.Certificate(os.getenv("CRED_PATH"))
+firebase_admin.initialize_app(cred)
+
+db = firestore.client()
+
+
+async def create_agent(room_id, transcript):
+    doc_ref = db.collection("Transcription").document(room_id)
+    data={
+        "prompt":transcript
+    }
+    doc_ref.set(data)
+    print(f"Agent {room_id} created succesfully.")
+
+
+async def save_audio(audiobuffer, room_url):
     """Save the audio buffer to a WAV file"""
     if audiobuffer.has_audio():
         merged_audio = audiobuffer.merge_audio_buffers()
-        filename = f"conversation_recording_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+        filename = os.path.join(FILES_DIR, f"audio_{room_url.removeprefix("https://applicationsquare.daily.co/")}.wav")
         with wave.open(filename, "wb") as wf:
             wf.setnchannels(2)
             wf.setsampwidth(2)
@@ -41,18 +64,18 @@ async def save_audio(audiobuffer):
     else:
         logger.warning("No audio data to save")
 
-async def save_transcription(transcriptions: Dict, participant_id: str):
+async def save_transcription(transcriptions: Dict, participant_id: str, room_url: str):
     """Save transcriptions to a JSON file"""
     if participant_id in transcriptions:
-        filename = f"transcription_{participant_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = os.path.join(FILES_DIR, f"transcription_{room_url.removeprefix("https://applicationsquare.daily.co/")}.json")        
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(transcriptions[participant_id], f, ensure_ascii=False, indent=2)
         logger.info(f"Transcription saved to {filename}")
 
-async def save_message_log(context, participant_id: str):
+async def save_message_log(context, participant_id: str, room_url: str):
     """Save the latest message log to a JSON file"""
     if context and context.get_messages():
-        filename = f"message_log_{participant_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filename = os.path.join(FILES_DIR, f"message_logs_{room_url.removeprefix("https://applicationsquare.daily.co/")}.json")
         full_path = os.path.abspath(filename)
         
         # Convert messages to a format that can be easily serialized
@@ -99,7 +122,7 @@ async def main():
         )
 
         # Initialize LLM service
-        llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4")
+        llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
 
         # Initial messages for the chatbot
         messages = [
@@ -173,13 +196,14 @@ async def main():
                     logger.info(f"[{entry['timestamp']}] {entry['text']}")
                 
                 # Save transcriptions to file
-                await save_transcription(transcriptions, participant_id)
+                # await save_transcription(transcriptions, participant_id, room_url)
                 
                 # Save message log
-                await save_message_log(context, participant_id)
+                await save_message_log(context, participant_id, room_url)
             
             # Save audio and end pipeline
-            await save_audio(audiobuffer)
+            await save_audio(audiobuffer, room_url)
+            await create_agent(room_url.removeprefix("https://applicationsquare.daily.co/"), context.get_messages())
             await task.queue_frame(EndFrame())
 
         # Run the pipeline
