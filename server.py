@@ -8,6 +8,9 @@ import argparse
 import os
 import subprocess
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
+from pydantic import BaseModel, Field
+from typing import Optional
 
 import aiohttp
 from dotenv import load_dotenv
@@ -25,6 +28,16 @@ bot_procs = {}
 daily_helpers = {}
 
 load_dotenv(override=True)
+
+
+class BotConfig(BaseModel):
+    speed: str = Field("normal", description="Voice speed (slow/normal/fast)")
+    emotion: list[str] = Field(["positivity:high", "curiosity"], description="List of emotions for the voice")
+    prompt: str = Field("You are a friendly customer service agent...", description="System prompt for the bot")
+    voice_id: str = Field("a0e99841-438c-4a64-b679-ae501e7d6091", description="Voice ID for TTS")
+    difficulty_level:  str = Field("You are a friendly customer service agent...", description="System prompt for the bot")
+    session_time: Optional[float] = Field(3600, description="Session expiry time in seconds")
+
 
 
 def cleanup():
@@ -59,8 +72,8 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-async def start_agent(request: Request):
+@app.post("/")
+async def start_agent(request: BotConfig):
     print(f"!!! Creating room")
     room = await daily_helpers["rest"].create_room(DailyRoomParams())
     print(f"!!! Room URL: {room.url}")
@@ -97,7 +110,11 @@ async def start_agent(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start subprocess: {e}")
 
-    return RedirectResponse(room.url)
+    # return RedirectResponse(room.url)
+    return {"room_url":room.url,
+            "token":token,
+            "room_id":(urlparse(room.url).path).removeprefix('/')
+            }
 
 
 @app.get("/status/{pid}")

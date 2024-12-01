@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from runner import configure
 
+from urllib.parse import urlparse
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndFrame, LLMMessagesFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -44,11 +45,11 @@ db = firestore.client()
 async def save_in_db(room_id, transcript):
     doc_ref = db.collection("Transcription").document(room_id)
     data={
-        "prompt":transcript
+        "transcript":transcript,
+        "type":"customer"
     }
     doc_ref.set(data)
     print(f"Agent {room_id} created succesfully.")
-
 
 async def save_audio(audiobuffer, room_url):
     """Save the audio buffer to a WAV file"""
@@ -114,13 +115,19 @@ async def main():
                 )
             ),
         )
+        
 
         # Initialize TTS service
-        tts = CartesiaTTSService(
-            api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id="a0e99841-438c-4a64-b679-ae501e7d6091",  # English voice
-        )
+        # tts = CartesiaTTSService(
+        #     api_key=os.getenv("CARTESIA_API_KEY"),
+        #     voice_id="a0e99841-438c-4a64-b679-ae501e7d6091",  # English voice
+        # )
 
+
+        tts=ElevenLabsTTSService(
+            api_key=os.getenv("ELEVENLABS_API_KEY"),
+            voice_id=os.getenv("ELEVENLABS_VOICE_ID")
+        )
         # Initialize LLM service
         llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
 
@@ -128,7 +135,7 @@ async def main():
         messages = [
             {
                 "role": "system",
-                "content": "You are Chatbot, a friendly, helpful robot. Your goal is to demonstrate your capabilities in a succinct way. Your output will be converted to audio so don't include special characters in your answers. Respond to what the user said in a creative and helpful way, but keep your responses brief. Start by introducing yourself. Keep all your response to 12 words or fewer.",
+                "content": "You are a customer named John, a 28-year-old who recently bought BARBOUR 11 glasses from Specsavers. Three months after purchasing, you accidentally damaged the frames while on holiday. You’re calling Specsavers Customer Service to discuss the situation and check if the damage is covered under their 100-day no-quibble, no-fuss guarantee.\nIn this conversation:\n- Only speak as John, the customer.\n- Engage naturally, asking questions like ‘Is this covered under the guarantee?’, ‘What will it cost if it isn’t?’, and ‘How long would a repair take?’. \n- Avoid providing answers on behalf of the agent. Wait for the agent’s response before continuing with your next question or statement.\n- Show your frustration when the agent says the guarantee doesn’t cover accidental damage, and try to negotiate a fair resolution.\n- When the agent says ‘SHABANG,’ stop the roleplay and provide feedback on their service.\n\nSpeak casually, as if in a real call. Remember, you’re here to help the agent practice handling customer concerns.",
             },
         ]
 
@@ -199,11 +206,11 @@ async def main():
                 # await save_transcription(transcriptions, participant_id, room_url)
                 
                 # Save message log
-                await save_message_log(context, participant_id, room_url)
+                # await save_message_log(context, participant_id, room_url)
             
             # Save audio and end pipeline
-            await save_audio(audiobuffer, room_url)
-            await save_in_db(room_url.removeprefix("https://applicationsquare.daily.co/"), context.get_messages())
+            # await save_audio(audiobuffer, room_url)
+            await save_in_db((urlparse(room_url).path).removeprefix('/'), context.get_messages())
             await task.queue_frame(EndFrame())
 
         # Run the pipeline

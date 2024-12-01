@@ -6,7 +6,6 @@
 
 import argparse
 import os
-
 import aiohttp
 
 from pipecat.transports.services.helpers.daily_rest import DailyRESTHelper
