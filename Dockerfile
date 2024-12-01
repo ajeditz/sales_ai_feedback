@@ -1,16 +1,13 @@
-FROM python:3.10-bullseye
+FROM python:3.11-bullseye
 
-RUN mkdir /app
-RUN mkdir /app/assets
-RUN mkdir /app/utils
-COPY *.py /app/
-COPY requirements.txt /app/
-copy assets/* /app/assets/
-copy utils/* /app/utils/
-
-WORKDIR /app
-RUN pip3 install -r requirements.txt
-
+# Open port 7860 for http service
+ENV FAST_API_PORT=7860
 EXPOSE 7860
 
-CMD ["python3", "server.py"]
+# Install Python dependencies
+COPY . .
+COPY ./requirements.txt requirements.txt
+RUN pip3 install --no-cache-dir --upgrade -r requirements.txt
+
+# Start the FastAPI server
+CMD python3 server.py --port ${FAST_API_PORT}

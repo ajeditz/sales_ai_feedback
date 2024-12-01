@@ -1,0 +1,25 @@
+# fly.toml app configuration file generated for sales-transcript-feedback on 2024-12-01T18:41:17+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'sales-transcript-feedback'
+primary_region = 'sjc'
+
+[build]
+
+[env]
+  FLY_APP_NAME = 'sales-transcript-feedback'
+
+[http_service]
+  internal_port = 7860
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '512'
+  cpu_kind = 'shared'
+  cpus = 1
