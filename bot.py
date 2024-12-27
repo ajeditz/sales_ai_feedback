@@ -44,11 +44,12 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 # TODO add type (customer/sales) parameter in save_in_db
-async def save_in_db(room_id, transcript):
+async def save_in_db(room_id, transcript,user_id):
     doc_ref = db.collection("Transcription").document(room_id)
     data={
         "transcript":transcript,
-        "type":"customer"
+        "type":"customer",
+        "user_id":user_id
     }
     doc_ref.set(data)
     print(f"Transcription saved successfully {room_id} ")
@@ -109,8 +110,7 @@ async def main(room_url:str, token:str, config_b64):
     transcriptions: Dict[str, list] = {}
     config_str = base64.b64decode(config_b64).decode()
     config = json.loads(config_str)
-    
-
+    user_id=config['user_id']
 
     # Initialize Daily transport
     transport = DailyTransport(
@@ -232,7 +232,7 @@ async def main(room_url:str, token:str, config_b64):
         
         # Save audio and end pipeline
         # await save_audio(audiobuffer, room_url)
-        await save_in_db((urlparse(room_url).path).removeprefix('/'), context.get_messages())
+        await save_in_db((urlparse(room_url).path).removeprefix('/'), context.get_messages(), user_id)
         await task.queue_frame(EndFrame())
 
     # Run the pipeline

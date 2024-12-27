@@ -64,6 +64,7 @@ class BotConfig(BaseModel):
     difficulty_level:  str = Field("You are a friendly customer service agent...", description="System prompt for the bot")
     session_time: Optional[float] = Field(3600, description="Session expiry time in seconds")
     avatar_name: str = Field("John",description="The name of the avatar")
+    user_id: str = Field("aldfalgna", description="User Id")
 
 
 
