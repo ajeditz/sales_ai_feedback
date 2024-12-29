@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from runner import configure
 
+from pipecat.services.azure import AzureLLMService, AzureSTTService, AzureTTSService, Language
 from urllib.parse import urlparse
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import EndFrame, LLMMessagesFrame
@@ -146,9 +147,18 @@ async def main(room_url:str, token:str, config_b64):
     #     params=tts_params  
     # )
     
-    tts=ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        voice_id=config['voice_id']
+    # tts=ElevenLabsTTSService(
+    #     api_key=os.getenv("ELEVENLABS_API_KEY"),
+    #     voice_id=config['voice_id']
+    # )
+
+    tts_service = AzureTTSService(
+        api_key=os.getenv("AZURE_API_KEY"),
+        region=os.getenv("AZURE_REGION"),
+        voice=os.getenv("AZURE_VOICE_ID"),
+        params=AzureTTSService.InputParams(
+            language=os.getenv("AZURE_LANG")
+        )
     )
     # Initialize LLM service
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
@@ -172,7 +182,7 @@ async def main(room_url:str, token:str, config_b64):
             transport.input(),
             context_aggregator.user(),
             llm,
-            tts,
+            tts_service,
             transport.output(),
             audiobuffer,
             context_aggregator.assistant(),
